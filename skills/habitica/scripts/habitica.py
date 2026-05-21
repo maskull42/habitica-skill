@@ -29,6 +29,7 @@ from habitica_client import (
     PlannedRequest,
     VALID_TASK_TYPES,
     iso_date,
+    iso_datetime,
     iso_time,
     new_uuid,
 )
@@ -62,6 +63,15 @@ def print_dry_run(result):
         print(repr(result))
         return True
     return False
+
+
+def build_reminder(time_text, date_text=None, timezone_offset=None):
+    when = (
+        iso_datetime(date_text, time_text, timezone_offset)
+        if date_text
+        else iso_time(time_text, timezone_offset)
+    )
+    return {"id": new_uuid(), "startDate": when, "time": when}
 
 
 # --------------------------------------------------------------------------
@@ -196,6 +206,26 @@ def cmd_get(client, args):
 
 def _build_task_fields(client, args, *, for_update):
     fields = {}
+    if for_update and args.checklist:
+        raise HabiticaError(
+            "`update --checklist` would replace the whole checklist and can "
+            "discard item ids/progress. Use checklist-add, checklist-update, "
+            "or checklist-rm instead."
+        )
+    reminder_date = args.due or args.start_date
+    if args.due is not None:
+        iso_date(args.due)
+    if args.start_date is not None:
+        iso_date(args.start_date)
+    for reminder_time in args.remind or []:
+        if reminder_date:
+            iso_datetime(reminder_date, reminder_time)
+        else:
+            iso_time(reminder_time)
+
+    timezone_offset = None
+    if not client.dry_run and (args.due or args.start_date or args.remind):
+        timezone_offset = client.get_timezone_offset()
     if getattr(args, "text", None) is not None:
         fields["text"] = args.text
     if args.notes is not None:
@@ -205,7 +235,7 @@ def _build_task_fields(client, args, *, for_update):
     if not for_update:
         fields["type"] = args.type
     if args.due is not None:
-        fields["date"] = iso_date(args.due)
+        fields["date"] = iso_date(args.due, timezone_offset)
     if args.checklist:
         fields["checklist"] = [{"text": t} for t in args.checklist]
     if args.frequency is not None:
@@ -215,12 +245,13 @@ def _build_task_fields(client, args, *, for_update):
     if args.repeat:
         fields["repeat"] = {day: (day in args.repeat) for day in REPEAT_DAYS}
     if args.start_date is not None:
-        fields["startDate"] = iso_date(args.start_date)
+        fields["startDate"] = iso_date(args.start_date, timezone_offset)
     if args.remind:
         fields["reminders"] = [
-            {"id": new_uuid(), "time": iso_time(t)} for t in args.remind
+            build_reminder(t, reminder_date, timezone_offset)
+            for t in args.remind
         ]
-    if args.tag:
+    if args.tag and not for_update:
         # Resolve tag names to ids (one GET /tags); optionally auto-create.
         if client.dry_run:
             fields["tags"] = [f"<tag:{name}>" for name in args.tag]
@@ -245,11 +276,31 @@ def cmd_add(client, args):
 
 def cmd_update(client, args):
     fields = _build_task_fields(client, args, for_update=True)
-    if not fields:
+    if not fields and not args.tag:
         raise HabiticaError("Nothing to update; pass at least one field.")
-    data = client.update_task(args.id, **fields)
-    if print_dry_run(data):
+    if client.dry_run:
+        if fields:
+            print_dry_run(client.update_task(args.id, **fields))
+        for name in args.tag or []:
+            print_dry_run(client.add_tag_to_task(args.id, f"<tag:{name}>"))
         return
+
+    tag_ids = []
+    for name in args.tag or []:
+        tag_ids.append(
+            (name, client.resolve_tag_id(name, create_missing=args.create_tags))
+        )
+
+    data = client.update_task(args.id, **fields) if fields else None
+    if tag_ids:
+        current = data or client.get_task(args.id)
+        current_tags = set(current.get("tags") or [])
+        data = current
+        for name, tag_id in tag_ids:
+            if tag_id in current_tags:
+                continue
+            data = client.add_tag_to_task(args.id, tag_id)
+            current_tags.add(tag_id)
     if args.json:
         emit(data, True)
     else:
@@ -377,6 +428,15 @@ def cmd_tag_assign(client, args):
     print(f"OK: tagged {_short_id(args.task_id)} with '{args.tag}'")
 
 
+def cmd_tag_unassign(client, args):
+    if client.dry_run:
+        print_dry_run(client.remove_tag_from_task(args.task_id, f"<tag:{args.tag}>"))
+        return
+    tag_id = client.resolve_tag_id(args.tag)
+    data = client.remove_tag_from_task(args.task_id, tag_id)
+    print(f"OK: removed tag '{args.tag}' from {_short_id(args.task_id)}")
+
+
 def cmd_tag_rm(client, args):
     if not args.yes and not client.dry_run:
         raise HabiticaError(
@@ -391,6 +451,29 @@ def cmd_tag_rm(client, args):
 # --------------------------------------------------------------------------
 # argument parser
 # --------------------------------------------------------------------------
+
+def _add_runtime_args(parser, *, include_limit=False, suppress_defaults=False):
+    default = argparse.SUPPRESS if suppress_defaults else None
+    bool_default = argparse.SUPPRESS if suppress_defaults else False
+    parser.add_argument("--json", action="store_true", default=bool_default,
+                        help="output raw JSON data")
+    parser.add_argument("--dry-run", action="store_true", default=bool_default,
+                        help="print the request that would be sent, then exit")
+    parser.add_argument("--app-name", default=default,
+                        help="override the x-client app name")
+    parser.add_argument("--base-url", default=default,
+                        help="override the API base URL")
+    parser.add_argument("--timeout", type=int, default=default,
+                        help="request timeout in seconds")
+    if include_limit:
+        parser.add_argument("--limit", type=int,
+                            default=argparse.SUPPRESS if suppress_defaults else DEFAULT_LIMIT,
+                            help=f"max rows for `list` (default {DEFAULT_LIMIT})")
+
+
+def _add_common_subcommand_args(parser, *, include_limit=False):
+    _add_runtime_args(parser, include_limit=include_limit, suppress_defaults=True)
+
 
 def _add_task_field_args(parser, *, require_text):
     parser.add_argument("--text", required=require_text, help="task title")
@@ -420,36 +503,38 @@ def build_parser():
         description="Manage a Habitica account (todos, habits, dailies, "
                     "rewards, checklists, tags, stats).",
     )
-    p.add_argument("--json", action="store_true", help="output raw JSON data")
-    p.add_argument("--dry-run", action="store_true",
-                   help="print the request that would be sent, then exit")
-    p.add_argument("--app-name", help="override the x-client app name")
-    p.add_argument("--base-url", help="override the API base URL")
-    p.add_argument("--timeout", type=int, help="request timeout in seconds")
-    p.add_argument("--limit", type=int, default=DEFAULT_LIMIT,
-                   help=f"max rows for `list` (default {DEFAULT_LIMIT})")
+    _add_runtime_args(p, include_limit=True)
 
     sub = p.add_subparsers(dest="command", required=True)
 
-    sub.add_parser("stats", help="show your level, HP, XP, gold").set_defaults(func=cmd_stats)
-    sub.add_parser("whoami", help="alias for stats").set_defaults(func=cmd_stats)
+    stats = sub.add_parser("stats", help="show your level, HP, XP, gold")
+    _add_common_subcommand_args(stats)
+    stats.set_defaults(func=cmd_stats)
+
+    whoami = sub.add_parser("whoami", help="alias for stats")
+    _add_common_subcommand_args(whoami)
+    whoami.set_defaults(func=cmd_stats)
 
     lst = sub.add_parser("list", help="list tasks")
+    _add_common_subcommand_args(lst, include_limit=True)
     lst.add_argument("--type", help="habits | dailys | todos | rewards | completedTodos")
     lst.add_argument("--tag", metavar="NAME", help="only tasks with this tag")
     lst.add_argument("--show-tags", action="store_true", help="render tag names")
     lst.set_defaults(func=cmd_list)
 
     get = sub.add_parser("get", help="show one task by id")
+    _add_common_subcommand_args(get)
     get.add_argument("id")
     get.set_defaults(func=cmd_get)
 
     add = sub.add_parser("add", help="create a task")
+    _add_common_subcommand_args(add)
     add.add_argument("--type", required=True, choices=list(VALID_TASK_TYPES))
     _add_task_field_args(add, require_text=True)
     add.set_defaults(func=cmd_add)
 
     upd = sub.add_parser("update", help="update a task")
+    _add_common_subcommand_args(upd)
     upd.add_argument("id")
     _add_task_field_args(upd, require_text=False)
     upd.set_defaults(func=cmd_update)
@@ -460,51 +545,68 @@ def build_parser():
         ("down", cmd_down, "score a task down (un-complete/penalize)"),
     ):
         sp = sub.add_parser(name, help=helptext)
+        _add_common_subcommand_args(sp)
         sp.add_argument("id")
         sp.add_argument("--yes", action="store_true", help="confirm guarded scoring")
         sp.set_defaults(func=fn)
 
     rm = sub.add_parser("rm", help="delete a task")
+    _add_common_subcommand_args(rm)
     rm.add_argument("id")
     rm.add_argument("--yes", action="store_true", help="confirm deletion")
     rm.set_defaults(func=cmd_rm)
 
     ca = sub.add_parser("checklist-add", help="add a checklist item")
+    _add_common_subcommand_args(ca)
     ca.add_argument("task_id")
     ca.add_argument("--text", required=True)
     ca.set_defaults(func=cmd_checklist_add)
 
     cc = sub.add_parser("checklist-check", help="toggle a checklist item")
+    _add_common_subcommand_args(cc)
     cc.add_argument("task_id")
     cc.add_argument("item_id")
     cc.set_defaults(func=cmd_checklist_check)
 
     cu = sub.add_parser("checklist-update", help="edit a checklist item's text")
+    _add_common_subcommand_args(cu)
     cu.add_argument("task_id")
     cu.add_argument("item_id")
     cu.add_argument("--text", required=True)
     cu.set_defaults(func=cmd_checklist_update)
 
     cr = sub.add_parser("checklist-rm", help="delete a checklist item")
+    _add_common_subcommand_args(cr)
     cr.add_argument("task_id")
     cr.add_argument("item_id")
     cr.add_argument("--yes", action="store_true", help="confirm deletion")
     cr.set_defaults(func=cmd_checklist_rm)
 
-    sub.add_parser("tags", help="list tags").set_defaults(func=cmd_tags)
+    tags = sub.add_parser("tags", help="list tags")
+    _add_common_subcommand_args(tags)
+    tags.set_defaults(func=cmd_tags)
 
     ta = sub.add_parser("tag-add", help="create a tag")
+    _add_common_subcommand_args(ta)
     ta.add_argument("--name", required=True)
     ta.set_defaults(func=cmd_tag_add)
 
     tas = sub.add_parser("tag-assign", help="assign a tag to a task")
+    _add_common_subcommand_args(tas)
     tas.add_argument("task_id")
     tas.add_argument("--tag", required=True, metavar="NAME")
     tas.add_argument("--create-tags", action="store_true",
                      help="create the tag if it doesn't exist")
     tas.set_defaults(func=cmd_tag_assign)
 
+    tu = sub.add_parser("tag-unassign", help="remove a tag from a task")
+    _add_common_subcommand_args(tu)
+    tu.add_argument("task_id")
+    tu.add_argument("--tag", required=True, metavar="NAME")
+    tu.set_defaults(func=cmd_tag_unassign)
+
     tr = sub.add_parser("tag-rm", help="delete a tag (removes it from all tasks)")
+    _add_common_subcommand_args(tr)
     tr.add_argument("id")
     tr.add_argument("--yes", action="store_true", help="confirm deletion")
     tr.set_defaults(func=cmd_tag_rm)
@@ -512,9 +614,27 @@ def build_parser():
     return p
 
 
+def _preflight_guards(args):
+    if args.dry_run:
+        return
+    if args.command == "rm" and not args.yes:
+        raise HabiticaError(
+            f"Deleting task {args.id} is permanent. Re-run with --yes to confirm."
+        )
+    if args.command == "checklist-rm" and not args.yes:
+        raise HabiticaError(
+            f"Deleting checklist item {args.item_id} is permanent. Re-run with --yes."
+        )
+    if args.command == "tag-rm" and not args.yes:
+        raise HabiticaError(
+            f"Deleting tag {args.id} removes it from ALL tasks. Re-run with --yes."
+        )
+
+
 def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
+        _preflight_guards(args)
         client = HabiticaClient(
             app_name=args.app_name,
             base=args.base_url or "https://habitica.com/api/v3",

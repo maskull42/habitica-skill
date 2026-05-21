@@ -14,7 +14,22 @@ SKILLS_DIR="${SKILLS_DIR:-$HOME/.claude/skills}"
 DEST="$SKILLS_DIR/habitica"
 MODE="symlink"
 
-[ "${1:-}" = "--copy" ] && MODE="copy"
+case "${1:-}" in
+    "")
+        ;;
+    "--copy")
+        MODE="copy"
+        ;;
+    "-h"|"--help")
+        sed -n '2,8p' "$0"
+        exit 0
+        ;;
+    *)
+        echo "error: unknown option: $1" >&2
+        echo "usage: ./install.sh [--copy]" >&2
+        exit 2
+        ;;
+esac
 
 if [ ! -f "$SRC/SKILL.md" ]; then
     echo "error: $SRC/SKILL.md not found; run this from the cloned repo." >&2
@@ -42,7 +57,7 @@ else
     echo "Linked $DEST -> $SRC"
 fi
 
-chmod +x "$SRC/scripts/habitica.py" 2>/dev/null || true
+chmod +x "$DEST/scripts/habitica.py" 2>/dev/null || true
 
 cat <<'EOF'
 
@@ -50,7 +65,8 @@ Next steps:
   1. Configure credentials (one of):
        export HABITICA_USER_ID="your-user-id"
        export HABITICA_API_TOKEN="your-api-token"
-     or create ~/.config/habitica/credentials (chmod 600) with those KEY=VALUE lines.
+     or create ~/.config/habitica/credentials with those KEY=VALUE lines, then run:
+       chmod 600 ~/.config/habitica/credentials
      Find both at https://habitica.com/user/settings/api
   2. Restart Claude Code so it picks up the new skill.
   3. Try it:  ask "show my Habitica todos", or run

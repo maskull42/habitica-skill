@@ -22,7 +22,9 @@ Credentials load from environment variables first
 (`HABITICA_USER_ID`, `HABITICA_API_TOKEN`, optional `HABITICA_APP_NAME`), then
 from `~/.config/habitica/credentials` (`KEY=VALUE` lines; override the path with
 `HABITICA_CREDENTIALS`). Get both values at
-https://habitica.com/user/settings/api.
+https://habitica.com/user/settings/api. On POSIX systems, the credentials file
+must not be group/world-readable; run
+`chmod 600 ~/.config/habitica/credentials`.
 
 ## Endpoints behind each command
 
@@ -42,6 +44,7 @@ https://habitica.com/user/settings/api.
 | `tags` | GET | `/tags` |
 | `tag-add` | POST | `/tags` |
 | `tag-assign` | POST | `/tasks/:taskId/tags/:tagId` |
+| `tag-unassign` | DELETE | `/tasks/:taskId/tags/:tagId` |
 | `tag-rm <id>` | DELETE | `/tags/:id` |
 
 Tags live at `/tags` (not `/user/tags`). `tag-assign` uses the dedicated
@@ -66,22 +69,25 @@ its id via one `GET /tags` (case-insensitive), creating it only with
 | `repeat` | daily | object with keys `su m t w th f s` (booleans); used when `frequency:weekly` |
 | `startDate` | daily | when the daily becomes active, ISO 8601 |
 | `daysOfMonth`, `weeksOfMonth` | daily | int arrays, used with `frequency:monthly` (not exposed by the CLI yet) |
-| `reminders` | daily, todo | array of `{id, startDate?, time}` — see below |
+| `reminders` | daily, todo | array of `{id, startDate, time}` — see below |
 
 ### Dates and times
 
-The CLI expands `--due`, `--start-date` (`YYYY-MM-DD`) and `--remind` (`HH:MM`)
-to ISO 8601 using the **machine's local timezone**, so a due date keeps its
-calendar day. If you run on a server in another timezone, pass full ISO strings
-via `--json`-style updates or set the box's timezone accordingly.
+For authenticated writes, the CLI expands `--due`, `--start-date`
+(`YYYY-MM-DD`) and `--remind` (`HH:MM`) to ISO 8601 using the Habitica
+account's stored timezone offset, so a due date keeps its intended account
+calendar day even if Claude Code runs on a machine in another timezone.
+`--dry-run` stays offline and uses the machine's local timezone for previews.
+Reminder dates use `--due` for to-dos, `--start-date` for dailies, or today's
+account date if neither is supplied.
 
 ### Reminders (least-verified)
 
 Each reminder is `{id, startDate, time}` where `id` is a UUID (the client
 generates one) and `time`/`startDate` are full ISO datetimes; for dailies the
-time-of-day is what matters. Reminder field shapes are **not** strongly
-documented in the official apidoc — treat `--remind` as best-effort and verify
-behavior in the Habitica app after setting one.
+time-of-day is what matters. Reminder behavior is still less thoroughly
+verified than task CRUD — treat `--remind` as best-effort and verify behavior in
+the Habitica app after setting one.
 
 ## Scoring semantics
 

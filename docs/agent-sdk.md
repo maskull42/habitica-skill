@@ -15,9 +15,9 @@ Point the SDK at `mcp/habitica_mcp.py` as a stdio MCP server, passing
 credentials through its environment (`HABITICA_USER_ID`, `HABITICA_API_TOKEN`).
 Tools include `list_tasks`, `get_stats`, `add_task`, `complete_task`,
 `score_task`, `delete_task` (and the checklist/tag tools). Destructive or costly
-tools (`delete_task`, `delete_tag`, `score_task` down on a daily/todo, scoring a
-reward up) require `confirm=true`, so your agent must confirm with the user
-before retrying with confirmation.
+tools (`delete_task`, `delete_tag`, `delete_checklist_item`, `score_task` down
+on a daily/todo, scoring a reward up) require `confirm=true`, so your agent must
+confirm with the user before retrying with confirmation.
 
 ## Path 2: import the client directly
 
@@ -41,7 +41,9 @@ except HabiticaError as e:
 
 Your agent owns the guardrails in this path — gate destructive calls
 (`delete_task`, `delete_tag`, `score_task(..., 'down')` on dailies/todos, and
-scoring rewards) behind user confirmation yourself.
+scoring rewards) behind user confirmation yourself. Use
+`remove_tag_from_task` to remove a tag from one task without deleting the tag
+globally.
 
 ## Not supported: the Claude API "skills" feature
 

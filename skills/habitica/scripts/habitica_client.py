@@ -16,9 +16,11 @@ https://github.com/HabitRPG/habitica/wiki/API-Usage-Guidelines
 from __future__ import annotations
 
 import datetime as _dt
+import email.utils
 import json
 import os
 import socket
+import stat
 import time
 import urllib.error
 import urllib.parse
@@ -113,6 +115,18 @@ def _parse_env_file(path):
     return values
 
 
+def _check_credentials_file_permissions(path):
+    """Refuse group/world-readable credential files on POSIX systems."""
+    if os.name != "posix":
+        return
+    mode = stat.S_IMODE(path.stat().st_mode)
+    if mode & 0o077:
+        raise HabiticaAuthError(
+            f"Credential file {path} is readable by other users. "
+            f"Run: chmod 600 {path}"
+        )
+
+
 def load_credentials():
     """Return (user_id, api_token, app_name), env first then config file.
 
@@ -125,6 +139,7 @@ def load_credentials():
     if not (user_id and token):
         path = _credentials_file()
         if path.is_file():
+            _check_credentials_file_permissions(path)
             data = _parse_env_file(path)
             user_id = user_id or data.get("HABITICA_USER_ID")
             token = token or data.get("HABITICA_API_TOKEN")
@@ -152,18 +167,60 @@ def _local_tz():
     return _dt.datetime.now().astimezone().tzinfo
 
 
-def iso_date(value):
-    """'YYYY-MM-DD' -> ISO 8601 at local midnight (keeps the calendar date)."""
-    d = _dt.datetime.strptime(value, "%Y-%m-%d")
-    return d.replace(tzinfo=_local_tz()).isoformat()
+def _tz_from_habitica_offset(timezone_offset):
+    """Convert Habitica/JS timezoneOffset minutes to a Python tzinfo."""
+    if timezone_offset is None:
+        return _local_tz()
+    try:
+        minutes = int(timezone_offset)
+    except (TypeError, ValueError):
+        return _local_tz()
+    return _dt.timezone(_dt.timedelta(minutes=-minutes))
 
 
-def iso_time(value):
-    """'HH:MM' -> ISO 8601 today at that local time (used for reminders)."""
-    hour, _, minute = value.partition(":")
-    now = _dt.datetime.now().astimezone()
+def iso_date(value, timezone_offset=None):
+    """'YYYY-MM-DD' -> ISO 8601 at midnight in the chosen timezone."""
+    try:
+        d = _dt.datetime.strptime(value, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        raise HabiticaError(f"Expected date as YYYY-MM-DD, got {value!r}.")
+    return d.replace(tzinfo=_tz_from_habitica_offset(timezone_offset)).isoformat()
+
+
+def iso_datetime(date_value, time_value, timezone_offset=None):
+    """'YYYY-MM-DD' + 'HH:MM' -> ISO 8601 in the chosen timezone."""
+    try:
+        d = _dt.datetime.strptime(date_value, "%Y-%m-%d")
+    except (TypeError, ValueError):
+        raise HabiticaError(f"Expected date as YYYY-MM-DD, got {date_value!r}.")
+    hour, minute = _parse_time(time_value)
+    return d.replace(
+        hour=hour,
+        minute=minute,
+        tzinfo=_tz_from_habitica_offset(timezone_offset),
+    ).isoformat()
+
+
+def _parse_time(value):
+    if not isinstance(value, str) or ":" not in value:
+        raise HabiticaError(f"Expected time as HH:MM, got {value!r}.")
+    hour_text, minute_text = value.split(":", 1)
+    try:
+        hour = int(hour_text)
+        minute = int(minute_text)
+    except ValueError:
+        raise HabiticaError(f"Expected time as HH:MM, got {value!r}.")
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        raise HabiticaError(f"Expected time as HH:MM, got {value!r}.")
+    return hour, minute
+
+
+def iso_time(value, timezone_offset=None):
+    """'HH:MM' -> ISO 8601 today in the chosen timezone."""
+    hour, minute = _parse_time(value)
+    now = _dt.datetime.now(_tz_from_habitica_offset(timezone_offset))
     return now.replace(
-        hour=int(hour), minute=int(minute or 0), second=0, microsecond=0
+        hour=hour, minute=minute, second=0, microsecond=0
     ).isoformat()
 
 
@@ -203,6 +260,8 @@ class HabiticaClient:
         self.base = base.rstrip("/")
         self.timeout = timeout
         self.dry_run = dry_run
+        allow_missing_creds = allow_missing_creds or dry_run
+        self._timezone_offset = None
 
         if user_id and api_token:
             self.user_id, self.api_token = user_id, api_token
@@ -284,12 +343,21 @@ class HabiticaClient:
 
     @staticmethod
     def _retry_after(headers):
-        # Retry-After is in seconds and may be fractional; cap the wait.
+        # Retry-After is normally seconds and may be fractional; cap the wait.
         raw = headers.get("Retry-After")
-        try:
-            return min(float(raw), 60.0) if raw else 2.0
-        except (TypeError, ValueError):
+        if not raw:
             return 2.0
+        try:
+            return max(0.0, min(float(raw), 60.0))
+        except (TypeError, ValueError):
+            try:
+                reset = email.utils.parsedate_to_datetime(raw)
+                if reset.tzinfo is None:
+                    reset = reset.replace(tzinfo=_dt.timezone.utc)
+                delay = (reset - _dt.datetime.now(_dt.timezone.utc)).total_seconds()
+                return max(0.0, min(delay, 60.0))
+            except (TypeError, ValueError):
+                return 2.0
 
     @staticmethod
     def _decode(raw):
@@ -342,14 +410,35 @@ class HabiticaClient:
     def get_user(self):
         return self.request("GET", "/user")
 
+    def get_timezone_offset(self):
+        """Return the user's Habitica timezone offset (JS minutes) when available."""
+        if self.dry_run:
+            return None
+        if self._timezone_offset is not None:
+            return self._timezone_offset
+        user = self.request(
+            "GET", "/user", query={"userFields": "preferences.timezoneOffset"}
+        )
+        prefs = (user or {}).get("preferences") or {}
+        offset = prefs.get("timezoneOffset")
+        try:
+            self._timezone_offset = int(offset)
+        except (TypeError, ValueError):
+            self._timezone_offset = None
+        return self._timezone_offset
+
     # -- tasks -------------------------------------------------------------
+
+    @staticmethod
+    def _quote_path(value):
+        return urllib.parse.quote(str(value), safe="")
 
     def list_tasks(self, task_type=None):
         query = {"type": normalize_type(task_type)} if task_type else None
         return self.request("GET", "/tasks/user", query=query)
 
     def get_task(self, task_id):
-        return self.request("GET", f"/tasks/{urllib.parse.quote(str(task_id))}")
+        return self.request("GET", f"/tasks/{self._quote_path(task_id)}")
 
     def create_task(self, **fields):
         body = {k: v for k, v in fields.items() if v is not None}
@@ -357,43 +446,43 @@ class HabiticaClient:
 
     def update_task(self, task_id, **fields):
         body = {k: v for k, v in fields.items() if v is not None}
-        return self.request("PUT", f"/tasks/{urllib.parse.quote(str(task_id))}", body=body)
+        return self.request("PUT", f"/tasks/{self._quote_path(task_id)}", body=body)
 
     def score_task(self, task_id, direction):
         if direction not in ("up", "down"):
             raise HabiticaError("direction must be 'up' or 'down'")
         return self.request(
-            "POST", f"/tasks/{urllib.parse.quote(str(task_id))}/score/{direction}"
+            "POST", f"/tasks/{self._quote_path(task_id)}/score/{direction}"
         )
 
     def delete_task(self, task_id):
-        return self.request("DELETE", f"/tasks/{urllib.parse.quote(str(task_id))}")
+        return self.request("DELETE", f"/tasks/{self._quote_path(task_id)}")
 
     # -- checklist ---------------------------------------------------------
 
     def add_checklist_item(self, task_id, text):
         return self.request(
-            "POST", f"/tasks/{urllib.parse.quote(str(task_id))}/checklist",
+            "POST", f"/tasks/{self._quote_path(task_id)}/checklist",
             body={"text": text},
         )
 
     def score_checklist_item(self, task_id, item_id):
         return self.request(
             "POST",
-            f"/tasks/{urllib.parse.quote(str(task_id))}/checklist/{item_id}/score",
+            f"/tasks/{self._quote_path(task_id)}/checklist/{self._quote_path(item_id)}/score",
         )
 
     def update_checklist_item(self, task_id, item_id, text):
         return self.request(
             "PUT",
-            f"/tasks/{urllib.parse.quote(str(task_id))}/checklist/{item_id}",
+            f"/tasks/{self._quote_path(task_id)}/checklist/{self._quote_path(item_id)}",
             body={"text": text},
         )
 
     def delete_checklist_item(self, task_id, item_id):
         return self.request(
             "DELETE",
-            f"/tasks/{urllib.parse.quote(str(task_id))}/checklist/{item_id}",
+            f"/tasks/{self._quote_path(task_id)}/checklist/{self._quote_path(item_id)}",
         )
 
     # -- tags --------------------------------------------------------------
@@ -405,12 +494,18 @@ class HabiticaClient:
         return self.request("POST", "/tags", body={"name": name})
 
     def delete_tag(self, tag_id):
-        return self.request("DELETE", f"/tags/{urllib.parse.quote(str(tag_id))}")
+        return self.request("DELETE", f"/tags/{self._quote_path(tag_id)}")
 
     def add_tag_to_task(self, task_id, tag_id):
         return self.request(
             "POST",
-            f"/tasks/{urllib.parse.quote(str(task_id))}/tags/{urllib.parse.quote(str(tag_id))}",
+            f"/tasks/{self._quote_path(task_id)}/tags/{self._quote_path(tag_id)}",
+        )
+
+    def remove_tag_from_task(self, task_id, tag_id):
+        return self.request(
+            "DELETE",
+            f"/tasks/{self._quote_path(task_id)}/tags/{self._quote_path(tag_id)}",
         )
 
     def resolve_tag_id(self, name, *, create_missing=False):

@@ -67,7 +67,8 @@ Provide them by either:
 
 - environment variables: `HABITICA_USER_ID`, `HABITICA_API_TOKEN`
   (optional `HABITICA_APP_NAME` to customize the `x-client` suffix); or
-- a file at `~/.config/habitica/credentials` (then `chmod 600`):
+- a file at `~/.config/habitica/credentials` (then
+  `chmod 600 ~/.config/habitica/credentials`):
 
   ```
   HABITICA_USER_ID=your-user-id

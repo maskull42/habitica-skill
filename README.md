@@ -75,11 +75,17 @@ export HABITICA_USER_ID="your-user-id"
 export HABITICA_API_TOKEN="your-api-token"
 ```
 
-or a file at `~/.config/habitica/credentials` (then `chmod 600 it`):
+or a file at `~/.config/habitica/credentials`:
 
 ```
 HABITICA_USER_ID=your-user-id
 HABITICA_API_TOKEN=your-api-token
+```
+
+Then lock it down:
+
+```bash
+chmod 600 ~/.config/habitica/credentials
 ```
 
 **Never commit your token.** Treat it like a password.
@@ -96,6 +102,7 @@ python3 "$SKILL" list --type todos
 python3 "$SKILL" add --type todo --text "Buy milk" --due 2026-06-01 --priority 1.5
 python3 "$SKILL" done <task-id>
 python3 "$SKILL" add --type daily --text "Stretch" --repeat m w f --remind 07:30
+python3 "$SKILL" tag-unassign <task-id> --tag Work
 python3 "$SKILL" --dry-run rm <task-id>   # preview without sending
 ```
 
@@ -132,6 +139,7 @@ No build step. After editing, sanity-check with:
 
 ```bash
 python3 -m py_compile skills/habitica/scripts/*.py mcp/habitica_mcp.py
+python3 -m unittest discover -s tests -v
 python3 skills/habitica/scripts/habitica.py --dry-run add --type todo --text demo
 ```
 

@@ -20,7 +20,8 @@ python3 "${CLAUDE_SKILL_DIR}/scripts/habitica.py" <command> [options]
 - Default output is compact and human-readable. Add `--json` only when you need
   to parse a result programmatically (it's more verbose — prefer the default to
   keep context small).
-- Add `--dry-run` to preview the exact HTTP request without sending it.
+- Add `--dry-run` to preview the exact HTTP request without sending it. Global
+  flags like `--dry-run` and `--json` work before or after the subcommand.
 - Requires Python 3.8+ and configured credentials (see **First-run setup**).
 
 ## Guardrails — read before acting
@@ -69,7 +70,9 @@ Tasks:
   `--checklist "a" "b"`, `--tag NAME` (repeatable, `--create-tags` to make new),
   and for dailies `--frequency <daily|weekly|monthly|yearly> --every N
   --repeat su m t w th f s --start-date YYYY-MM-DD --remind HH:MM`.
-- `update <id> [same field flags]` — change a task.
+- `update <id> [same field flags]` — change text/notes/priority/due/recurrence,
+  set reminders, or add tags with `--tag`. It refuses `--checklist`; use the
+  dedicated checklist commands so item ids and progress are preserved.
 - `done <id>` — complete a to-do/daily or score a habit up.
 - `up <id>` / `down <id>` — score a habit (+/–); `down` on a daily/todo is guarded.
 - `rm <id> --yes` — delete (guarded).
@@ -81,6 +84,7 @@ Checklists & tags:
 - `checklist-rm <taskId> <itemId> --yes` — delete (guarded).
 - `tag-add --name "..."`
 - `tag-assign <taskId> --tag NAME [--create-tags]`
+- `tag-unassign <taskId> --tag NAME`
 - `tag-rm <tagId> --yes` — delete (guarded).
 
 Task ids are shown in `list`/`get` output as `id=…`. Use the full id in
@@ -119,6 +123,7 @@ them — do **not** ask them to paste their token into the chat. Tell them:
    copy their **User ID** and **API Token**.
 2. Either export environment variables in their shell profile:
    `export HABITICA_USER_ID=…` and `export HABITICA_API_TOKEN=…`,
-   or create `~/.config/habitica/credentials` (then `chmod 600` it) with lines
+   or create `~/.config/habitica/credentials` (then
+   `chmod 600 ~/.config/habitica/credentials`) with lines
    `HABITICA_USER_ID=…` and `HABITICA_API_TOKEN=…`.
 3. Re-run the command. Verify with `stats`.

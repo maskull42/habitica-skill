@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Optional
+from typing import Any, Optional
 
 # Import the shared client from the skill's scripts directory (single source
 # of truth). Override the location with HABITICA_CLIENT_DIR if you relocate it.
@@ -53,7 +53,7 @@ def _get_client() -> hc.HabiticaClient:
     return _client
 
 
-def _safe(fn):
+def _safe(fn) -> Any:
     """Run fn(); convert HabiticaError into a clean message for the model."""
     try:
         return fn()
@@ -82,6 +82,19 @@ def _trim_task(task: dict) -> dict:
             for i in checklist
         ]
     return out
+
+
+def _build_reminder(
+    time_text: str,
+    date_text: str = "",
+    timezone_offset: Optional[int] = None,
+) -> dict:
+    when = (
+        hc.iso_datetime(date_text, time_text, timezone_offset)
+        if date_text
+        else hc.iso_time(time_text, timezone_offset)
+    )
+    return {"id": hc.new_uuid(), "startDate": when, "time": when}
 
 
 CONFIRM_HINT = "Set confirm=true to proceed (the user must agree first)."
@@ -147,14 +160,28 @@ def add_task(
     priority: 0.1 trivial, 1 easy, 1.5 medium, 2 hard. due/start_date: 'YYYY-MM-DD'.
     repeat_days: subset of [su,m,t,w,th,f,s] (dailies). reminders: ['HH:MM', ...]."""
     def run():
+        if due:
+            hc.iso_date(due)
+        if start_date:
+            hc.iso_date(start_date)
+        reminder_date = due or start_date
+        for reminder_time in reminders or []:
+            if reminder_date:
+                hc.iso_datetime(reminder_date, reminder_time)
+            else:
+                hc.iso_time(reminder_time)
+
         client = _get_client()
+        timezone_offset = None
+        if due or start_date or reminders:
+            timezone_offset = client.get_timezone_offset()
         fields: dict = {"type": task_type, "text": text}
         if notes:
             fields["notes"] = notes
         if priority is not None:
             fields["priority"] = priority
         if due:
-            fields["date"] = hc.iso_date(due)
+            fields["date"] = hc.iso_date(due, timezone_offset)
         if checklist:
             fields["checklist"] = [{"text": t} for t in checklist]
         if tags:
@@ -170,10 +197,11 @@ def add_task(
             fields["repeat"] = {d: (d in repeat_days) for d in
                                 ("su", "m", "t", "w", "th", "f", "s")}
         if start_date:
-            fields["startDate"] = hc.iso_date(start_date)
+            fields["startDate"] = hc.iso_date(start_date, timezone_offset)
         if reminders:
             fields["reminders"] = [
-                {"id": hc.new_uuid(), "time": hc.iso_time(t)} for t in reminders
+                _build_reminder(t, reminder_date, timezone_offset)
+                for t in reminders
             ]
         return _trim_task(client.create_task(**fields))
     return _safe(run)
@@ -189,6 +217,9 @@ def update_task(
 ) -> dict:
     """Update a task's text, notes, priority (0.1/1/1.5/2), or due date ('YYYY-MM-DD')."""
     def run():
+        if due is not None:
+            hc.iso_date(due)
+        client = _get_client()
         fields = {}
         if text is not None:
             fields["text"] = text
@@ -197,10 +228,10 @@ def update_task(
         if priority is not None:
             fields["priority"] = priority
         if due is not None:
-            fields["date"] = hc.iso_date(due)
+            fields["date"] = hc.iso_date(due, client.get_timezone_offset())
         if not fields:
             return "Error: nothing to update."
-        return _trim_task(_get_client().update_task(task_id, **fields))
+        return _trim_task(client.update_task(task_id, **fields))
     return _safe(run)
 
 
@@ -297,6 +328,17 @@ def assign_tag(task_id: str, tag_name: str, create_if_missing: bool = False) -> 
         tag_id = client.resolve_tag_id(tag_name, create_missing=create_if_missing)
         client.add_tag_to_task(task_id, tag_id)
         return f"OK: tagged {task_id} with '{tag_name}'"
+    return _safe(run)
+
+
+@mcp.tool()
+def remove_tag(task_id: str, tag_name: str) -> str:
+    """Remove a tag from one task without deleting the tag globally."""
+    def run():
+        client = _get_client()
+        tag_id = client.resolve_tag_id(tag_name)
+        client.remove_tag_from_task(task_id, tag_id)
+        return f"OK: removed tag '{tag_name}' from {task_id}"
     return _safe(run)
 
 
