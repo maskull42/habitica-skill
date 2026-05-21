@@ -20,3 +20,7 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+
+# Local-only audit documents (not part of the public project)
+/AUDIT.md
+/docs/audit-report.md
