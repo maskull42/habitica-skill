@@ -17,7 +17,7 @@ the MCP server or import the client directly.
 
 ```text
 /plugin marketplace add maskull42/habitica-skill
-/plugin install habitica@habitica-marketplace
+/plugin install habitica@habitica-for-claude
 ```
 
 Then configure credentials (below) and restart Claude Code. The skill is

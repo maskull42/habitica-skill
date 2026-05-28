@@ -1,5 +1,5 @@
 {
-  "name": "habitica-marketplace",
+  "name": "habitica-for-claude",
   "owner": {
     "name": "A.G. Elrod"
   },
@@ -9,13 +9,8 @@
       "name": "habitica",
       "source": "./",
       "description": "Manage your Habitica account — to-dos, habits, dailies, rewards, reminders, checklists, tags, and character stats.",
-      "version": "1.1.0",
-      "author": {
-        "name": "A.G. Elrod"
-      },
       "homepage": "https://github.com/maskull42/habitica-skill",
       "repository": "https://github.com/maskull42/habitica-skill",
-      "license": "MIT",
       "keywords": ["productivity", "task-management", "habitica", "todo", "habits"]
     }
   ]

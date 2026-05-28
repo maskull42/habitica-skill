@@ -51,7 +51,7 @@ See [`docs/install.md`](docs/install.md) for full details and
 
 ```text
 /plugin marketplace add maskull42/habitica-skill
-/plugin install habitica@habitica-marketplace
+/plugin install habitica@habitica-for-claude
 ```
 
 **Or clone and link:**
