@@ -147,6 +147,11 @@ Contributions welcome — open an issue or PR. Please keep the skill/CLI
 dependency-free (standard library only); dependencies belong only to the
 optional MCP server.
 
+## Privacy
+
+No information about you is collected by this Software or sent to the author —
+see [PRIVACY.md](PRIVACY.md) for the full data-flow disclosure.
+
 ## License & disclaimer
 
 [MIT](LICENSE) © 2026 A.G. Elrod. Not affiliated with or endorsed by Habitica /
